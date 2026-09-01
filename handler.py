@@ -229,17 +229,22 @@ def _concurrency_modifier(current_concurrency: int) -> int:  # noqa: ARG001
 
 
 # -----------------------------------------------------------------------------
-# Progress + debug envelope
+# Debug envelope
+#
+# This worker emits no progress updates, deliberately.
+# `runpod.serverless.progress_update` POSTs {"status": "IN_PROGRESS"} from a
+# background thread to the same endpoint the SDK posts the final result to,
+# with no ordering guarantee between the two. An update that lands after the
+# COMPLETED post overwrites the finished job back to IN_PROGRESS, and nothing
+# ever resolves it: the result is gone and the request hangs forever.
+#
+# Keeping an update at a phase "followed by seconds of real work" is not a fix.
+# On the office path (DOCX/XLSX) the whole parse is milliseconds -- 88 ms and
+# 1.2 s in two stranded jobs observed in production -- so the parsing update
+# sits the same handful of milliseconds from completion that the packaging one
+# did, and loses the race just as reliably. There is no phase late enough to be
+# useful and early enough to be safe, so there are none at all.
 # -----------------------------------------------------------------------------
-
-def _maybe_progress(job: dict, data: dict) -> None:
-    """Best-effort progress update. Tests / sync clients without a job id
-    shouldn't fail just because we tried to surface progress."""
-    try:
-        runpod.serverless.progress_update(job, data)
-    except Exception as e:  # noqa: BLE001
-        _logging.debug("progress_update failed", error=repr(e))
-
 
 def _build_debug(phase_ms: dict[str, int], gpu_info: dict[str, Any], **extra: Any) -> dict[str, Any]:
     return {
@@ -325,7 +330,6 @@ async def _handle_parse(
     )
 
     _note_shutdown("fetch_input")
-    _maybe_progress(job, {"phase": "fetching_input"})
     t = time.monotonic()
     with _telemetry.span("mineru.fetch_input", phase="fetch_input"):
         file_bytes, source = await _io.resolve_input_bytes(cleaned)
@@ -352,13 +356,6 @@ async def _handle_parse(
         )
 
     _note_shutdown("parse")
-    _maybe_progress(job, {
-        "phase": "parsing",
-        "input_bytes": len(file_bytes),
-        "input_format": input_format,
-        "start_page": cleaned["start_page"],
-        "end_page": end_page,
-    })
 
     with tempfile.TemporaryDirectory(prefix="mineru-job-") as tmp:
         work_dir = Path(tmp)
@@ -392,10 +389,6 @@ async def _handle_parse(
         _telemetry.histogram_record("phase_duration", parse_seconds, phase="parse")
 
         _note_shutdown("package")
-        # No progress_update here: the SDK sends progress from a background
-        # thread to the same endpoint as the final result, and packaging
-        # finishes in milliseconds — an update this close to completion can
-        # land after the COMPLETED post and strand the job IN_PROGRESS.
 
         t = time.monotonic()
         # `pages_requested` reflects the slice the caller asked for, NOT the
