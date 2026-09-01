@@ -462,17 +462,19 @@ def test_handler_probe_mode_returns_filesystem_dump():
 
 
 # -----------------------------------------------------------------------------
-# Progress updates — regression guard for the packaging/completion race.
+# Progress updates — regression guard for the progress/completion race.
 #
-# progress_update POSTs {"status": "IN_PROGRESS"} from a background thread
-# to the same endpoint the SDK posts the final result to. Any update emitted
-# after the parse phase runs milliseconds before the handler returns, so it
-# can land AFTER the COMPLETED post and overwrite the finished job back to
-# IN_PROGRESS — the job then appears stuck forever. The parse phase must
-# therefore be the last progress event of a request.
+# progress_update POSTs {"status": "IN_PROGRESS"} from a background thread to
+# the same endpoint the SDK posts the final result to, with no ordering
+# guarantee. An update that lands after the COMPLETED post overwrites the
+# finished job back to IN_PROGRESS and strands it there forever, result lost.
+#
+# Holding the last update at the parse phase was not enough: on the office path
+# the parse itself is milliseconds, so that update is as close to completion as
+# the packaging one was. A request must emit no progress updates at all.
 # -----------------------------------------------------------------------------
 
-def test_no_progress_update_after_parse(monkeypatch):
+def test_no_progress_updates_at_all(monkeypatch):
     async def fake_run(file_bytes, *, basename, work_dir, **kwargs):
         out = work_dir / "out"
         out.mkdir()
@@ -493,9 +495,8 @@ def test_no_progress_update_after_parse(monkeypatch):
     }))
 
     assert result["ok"] is True
-    assert phases, "expected progress updates during the request"
-    assert phases[-1] == "parsing", (
-        f"last progress phase must be 'parsing'; a later update (got {phases!r}) "
+    assert phases == [], (
+        f"the handler must emit no progress updates (got {phases!r}); each one "
         f"races the COMPLETED result post and can strand the job IN_PROGRESS"
     )
 

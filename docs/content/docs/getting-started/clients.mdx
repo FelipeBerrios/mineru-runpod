@@ -67,7 +67,7 @@ The response wraps each parsed file in a `results: [...]` list — for a single-
 
 - **No async submission.** Only exposes `run_sync`. If you want to fire off 100 parses concurrently, you'll need your own thread pool or `asyncio` layer on top.
 - **No retries or backoff.** Cold-start jobs can fail; the wrapper does not retry. Add your own retry logic with `tenacity` or similar if you need it.
-- **No streaming progress.** The handler emits `progress_update` events during a parse; the client ignores them.
+- **No streaming progress.** The handler emits no `progress_update` events at all — see [why](/reference/api#progress-updates-none-deliberately) — so there is nothing to stream.
 - **No typed response models.** Returns a raw `dict`. If you want a `ParsedDocument` Pydantic model, write your own adapter (see [the adapter example](https://github.com/sergeyshmakov/mineru-runpod/blob/main/examples/parser_adapter_example.py)).
 - **Not every raw field is wrapped.** Use the direct SDK or HTTP contract for fields such as hybrid `effort` or `archive_format`.
 
@@ -143,7 +143,7 @@ Full job-input shape is in [API reference](/reference/api/).
 | Production ingest pipeline, > 10 concurrent parses | **B — RunPod SDK direct** |
 | Non-Python caller (TypeScript backend, Go service) | **B — HTTP direct** |
 | You already use `runpod.Endpoint` elsewhere | **B — SDK direct** |
-| You need streaming progress for long parses | **B — SDK `Job.stream()`** |
+| You need to poll a long parse | **B — SDK `Job.status()`** (the handler emits no progress events) |
 | You're wrapping into your own typed domain model | **B**, then implement your own adapter |
 
 Rough rule: prototype with A, switch to B when you outgrow it. Outgrowing happens at roughly: needing async, needing retries beyond what your job-scheduler does, or hitting throughput where the client becomes a bottleneck.
